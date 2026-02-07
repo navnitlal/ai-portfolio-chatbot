@@ -10,7 +10,15 @@ from langchain_core.messages import HumanMessage
 AssetClass = Literal["Stock","Bond","Cash","ETF"]
 RiskProfile = Literal["Conservative","Moderate","Aggressive"]
 
-tavily = TavilySearch(max_results=6)
+# Lazy initialization: created on first use so missing TAVILY_API_KEY fails gracefully.
+_tavily: Optional[TavilySearch] = None
+
+
+def _get_tavily() -> TavilySearch:
+    global _tavily
+    if _tavily is None:
+        _tavily = TavilySearch(max_results=6)
+    return _tavily
 
 ASSET_CLASS_QUERIES: Dict[AssetClass, List[str]] = {
     "Stock": [
@@ -32,12 +40,30 @@ ASSET_CLASS_QUERIES: Dict[AssetClass, List[str]] = {
 }
 
 def search_trends(asset_classes: List[AssetClass]) -> Dict[str, Any]:
+    """Search Tavily for each asset class's queries. Errors are caught per-query so one failure doesn't break the whole batch."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    tavily = _get_tavily()
     results: Dict[str, Any] = {}
+
+    def _run_query(ac: str, q: str) -> tuple[str, Dict[str, Any]]:
+        try:
+            return ac, {"query": q, "result": tavily.invoke({"query": q})}
+        except Exception as e:
+            return ac, {"query": q, "result": f"[Tavily error: {e}]"}
+
+    # Collect all (asset_class, query) pairs and run them in parallel
+    tasks = []
     for ac in asset_classes:
-        merged = []
         for q in ASSET_CLASS_QUERIES.get(ac, []):
-            merged.append({"query": q, "result": tavily.invoke({"query": q})})
-        results[ac] = merged
+            tasks.append((ac, q))
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {pool.submit(_run_query, ac, q): (ac, q) for ac, q in tasks}
+        for future in as_completed(futures):
+            ac, item = future.result()
+            results.setdefault(ac, []).append(item)
+
     return results
 
 def _trim_trends_for_prompt(trends_result: Dict[str, Any], max_per_result: int = 1200) -> Dict[str, Any]:
@@ -64,20 +90,22 @@ def _trim_trends_for_prompt(trends_result: Dict[str, Any], max_per_result: int =
 def summarize_and_recommend(llm: BaseChatModel, trends_result: Dict[str, Any], current_profile: Optional[RiskProfile]) -> Dict[str, Any]:
     trends_trimmed = _trim_trends_for_prompt(trends_result)
     prompt = f"""
-You are analyzing internet trend snippets for asset classes (stocks/bonds/cash/ETF) and giving risk-aware guidance.
+You are analyzing internet trend snippets for asset classes (stocks/bonds/cash/ETF) and providing educational, risk-aware observations.
 
 Current risk profile: {current_profile}
 
+Important: You are strictly informational. Do NOT recommend the user change their portfolio or risk profile. Do NOT say "you should" or "I recommend". Instead, present neutral observations about how current trends relate to different risk postures (conservative, moderate, aggressive). The user and their financial advisor will decide what to do.
+
 Task:
 1) Summarize trend per asset class in 2-4 bullet points each (risk/volatility/interest rates focus).
-2) Provide a cautious recommendation: keep risk profile / consider decreasing risk / consider increasing risk.
+2) Provide a neutral observation about whether current market conditions generally favor conservative, moderate, or aggressive positioning — framed as educational context, not a personal recommendation.
 3) Return ONLY JSON:
 {{
   "summary": {{"Stock":[...],"Bond":[...],"Cash":[...],"ETF":[...]}},
   "risk_recommendation": {{
      "suggested_change":"none|decrease|increase",
      "suggested_profile":"Conservative|Moderate|Aggressive|null",
-     "reason":"short"
+     "reason":"short educational observation, not a personal recommendation"
   }}
 }}
 

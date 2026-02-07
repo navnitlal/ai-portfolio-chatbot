@@ -67,6 +67,8 @@ db.sqlite3-journal
 # App local data (SQLite)
 portfolio.db
 portfolio.db-journal
+portfolio.db-shm
+portfolio.db-wal
 
 # Flask stuff:
 instance/

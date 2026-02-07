@@ -32,7 +32,7 @@ def infer_risk_from_allocation(
     stock_pct: float, bond_pct: float, cash_pct: float, etf_pct: float = 0.0
 ) -> RiskProfile:
     """Infer risk category from portfolio allocation (Stock/Bond/Cash/ETF ratios)."""
-    # Equity-heavy (Stock + ETF) → more aggressive; bond/cash-heavy → more conservative
+    # Equity-heavy (Stock + ETF) -> more aggressive; bond/cash-heavy -> more conservative
     equity = stock_pct + etf_pct
     if equity >= 0.65:
         return "Aggressive"
@@ -49,10 +49,31 @@ def score_risk_answers(answers: Dict[str, str]) -> RiskProfile:
     a4 = (answers.get("4") or "").lower()
 
     score = 0
-    score += 2 if "8" in a1 or "+" in a1 else (1 if "3" in a1 or "7" in a1 else 0)
-    score += 2 if "high" in a2 else (1 if "medium" in a2 else 0)
-    score += 2 if "max" in a3 or "growth" in a3 else (1 if "balanced" in a3 else 0)
-    score += 2 if "buy" in a4 else (1 if "hold" in a4 else 0)
+    # Q1: time horizon
+    if "8" in a1 or "+" in a1:
+        score += 2
+    elif "3" in a1 or "7" in a1:
+        score += 1
+
+    # Q2: income stability
+    if "high" in a2:
+        score += 2
+    elif "medium" in a2:
+        score += 1
+
+    # Q3: primary goal — check "max" before "growth" so "balanced growth" scores 1 not 2
+    if "max" in a3:
+        score += 2
+    elif "balanced" in a3:
+        score += 1
+    elif "growth" in a3:
+        score += 2  # standalone "growth" without "balanced" implies max growth
+
+    # Q4: reaction to drop
+    if "buy" in a4:
+        score += 2
+    elif "hold" in a4:
+        score += 1
 
     if score >= 6:
         return "Aggressive"
