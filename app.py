@@ -171,9 +171,8 @@ def main():
     # Load portfolio once per run to avoid duplicate DB reads in sidebar, graph context, and flags.
     df_all = store.load_all()
 
-    # --- Sidebar: Portfolio data ---
-    st.sidebar.header("Portfolio data")
-    upload_info = st.sidebar.expander("Upload portfolio CSV", expanded=True)
+    # --- Sidebar: Upload portfolio CSV ---
+    upload_info = st.sidebar.expander("Upload portfolio CSV", expanded=False)
     with upload_info:
         st.caption(
             "CSV columns: Date, StockValue, BondValue, ETFValue, CashValue, "
@@ -258,47 +257,42 @@ def main():
                 st.session_state.sidebar_messages.append({"kind": "error", "text": f"Could not parse CSV: {e}"})
                 st.toast(f"Could not parse CSV: {e}", icon="❌")
 
-    # --- Sidebar: Snapshot ---
-    st.sidebar.header("Snapshot")
-    if not df_all.empty:
-        last_date = df_all["Date"].max()
-        alloc = allocation_on_date(df_all, last_date)
-        last_row = df_all[df_all["Date"] == last_date].iloc[0]
-        total_val = float(
-            last_row.get(
-                "TotalValue",
-                last_row["StockValue"]
-                + last_row["BondValue"]
-                + last_row["CashValue"]
-                + last_row["ETFValue"],
+    # --- Sidebar: Snapshot (expander) ---
+    with st.sidebar.expander("Snapshot", expanded=False):
+        if not df_all.empty:
+            last_date = df_all["Date"].max()
+            alloc = allocation_on_date(df_all, last_date)
+            last_row = df_all[df_all["Date"] == last_date].iloc[0]
+            total_val = float(
+                last_row.get(
+                    "TotalValue",
+                    last_row["StockValue"]
+                    + last_row["BondValue"]
+                    + last_row["CashValue"]
+                    + last_row["ETFValue"],
+                )
             )
-        )
-        st.sidebar.text(f"Date: {last_date.isoformat()}")
-        st.sidebar.text(f"Total value: {total_val:,.2f}")
-        st.sidebar.text(f"Stock %: {round(alloc['Stock'] * 100, 2)}")
-        st.sidebar.text(f"Bond %: {round(alloc['Bond'] * 100, 2)}")
-        st.sidebar.text(f"ETF %: {round(alloc['ETF'] * 100, 2)}")
-        st.sidebar.text(f"Cash %: {round(alloc['Cash'] * 100, 2)}")
-        # Always show current risk category based on portfolio allocation (last date)
-        current_risk = infer_risk_from_allocation(
-            alloc["Stock"], alloc["Bond"], alloc["Cash"], alloc["ETF"]
-        )
-        st.sidebar.text(f"Risk profile: {current_risk}")
-    else:
-        st.sidebar.caption("No portfolio loaded yet. Upload a CSV to see a snapshot.")
+            st.text(f"Date: {last_date.isoformat()}")
+            st.text(f"Total value: {total_val:,.2f}")
+            st.text(f"Stock %: {round(alloc['Stock'] * 100, 2)}")
+            st.text(f"Bond %: {round(alloc['Bond'] * 100, 2)}")
+            st.text(f"ETF %: {round(alloc['ETF'] * 100, 2)}")
+            st.text(f"Cash %: {round(alloc['Cash'] * 100, 2)}")
+            current_risk = infer_risk_from_allocation(
+                alloc["Stock"], alloc["Bond"], alloc["Cash"], alloc["ETF"]
+            )
+            st.text(f"Risk profile: {current_risk}")
+        else:
+            st.caption("No portfolio loaded yet. Upload a CSV to see a snapshot.")
 
-    # --- Sidebar: Maintenance ---
-    st.sidebar.header("Maintenance")
-    with st.sidebar.expander("Clear portfolio data"):
-        st.caption("Remove all daily portfolio values. Cannot be undone.")
-        if st.button("Confirm & Clear", type="secondary"):
-            store.clear_portfolio()
-            state.messages.append(AIMessage(content="Portfolio data has been cleared. You can upload a new CSV to start over."))
-            st.session_state.sidebar_messages.append({"kind": "warning", "text": "All portfolio data has been cleared."})
-            st.session_state.state = state
-            # Toast-style notification instead of sidebar messages list
-            st.toast("All portfolio data has been cleared.", icon="⚠️")
-            st.rerun()
+    # --- Sidebar: Clear portfolio data (button) ---
+    if st.sidebar.button("Clear portfolio data", type="secondary"):
+        store.clear_portfolio()
+        state.messages.append(AIMessage(content="Portfolio data has been cleared. You can upload a new CSV to start over."))
+        st.session_state.sidebar_messages.append({"kind": "warning", "text": "All portfolio data has been cleared."})
+        st.session_state.state = state
+        st.toast("All portfolio data has been cleared.", icon="⚠️")
+        st.rerun()
 
     # Chat (risk question: only show question text; buttons replace "Choose one: ..." and are inside the assistant bubble)
     last_content = (state.messages[-1].content or "") if state.messages and isinstance(state.messages[-1], AIMessage) else ""

@@ -42,7 +42,7 @@ Risk questionnaire (when running it):
 
 Portfolio edit / change requests:
 - When the user asks to edit, add, update, or remove portfolio data, call get_edit_help. Your reply must be the exact tool result and nothing else (either "upload your latest CSV via the sidebar" or "contact a human advisor"). Output the tool result once, verbatim.
-- When the user asks to clear, delete, or remove all portfolio data: respond with "To clear all portfolio data, use the 'Clear portfolio data' button in the sidebar under 'Maintenance'." Do NOT call get_edit_help for clearing requests—clearing is handled by the sidebar button, not through chat. Keep the response brief and direct.
+- When the user asks to clear, delete, or remove all portfolio data: respond with "To clear all portfolio data, use the 'Clear portfolio data' button in the sidebar." Do NOT call get_edit_help for clearing requests—clearing is handled by the sidebar button, not through chat. Keep the response brief and direct.
 """
 
 NUM_RISK_QUESTIONS = 4
