@@ -1,6 +1,6 @@
 [project]
 name = "ai-portfolio-chatbot"
-version = "0.2.0"
+version = "0.3.0"
 description = "Daily asset-class portfolio assistant (Streamlit + LangGraph) with SQLite, risk profiling, performance analytics, and Tavily trend insights."
 readme = "README.md"
 requires-python = ">=3.10"

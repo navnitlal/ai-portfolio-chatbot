@@ -1,11 +1,21 @@
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 import pandas as pd
+
+_PORTFOLIO_COLUMNS = [
+    "Date", "StockValue", "BondValue", "ETFValue", "CashValue",
+    "CashAddition", "CashWithdrawal", "TotalValue",
+]
+
+_VALUE_COLUMNS = [
+    "StockValue", "BondValue", "ETFValue", "CashValue",
+    "CashAddition", "CashWithdrawal", "TotalValue",
+]
 
 DB_SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -52,6 +62,24 @@ def _migrate_portfolio_columns(con: sqlite3.Connection) -> None:
         "UPDATE portfolio_daily SET total_value = stock_value + bond_value + cash_value + etf_value WHERE total_value IS NULL OR total_value = 0"
     )
     con.commit()
+
+
+def _postprocess_df(rows: List, columns: List[str]) -> pd.DataFrame:
+    """Shared post-processing: build DataFrame, coerce types, and recompute TotalValue if missing."""
+    df = pd.DataFrame(rows, columns=columns)
+    if df.empty:
+        return df
+    df["Date"] = pd.to_datetime(df["Date"]).dt.date
+    for c in _VALUE_COLUMNS:
+        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(float)
+    # Recompute total if missing (e.g. legacy rows)
+    mask = (df["TotalValue"] == 0) & (df["StockValue"] + df["BondValue"] + df["CashValue"] + df["ETFValue"] > 0)
+    if mask.any():
+        df.loc[mask, "TotalValue"] = (
+            df.loc[mask, "StockValue"] + df.loc[mask, "BondValue"] + df.loc[mask, "CashValue"] + df.loc[mask, "ETFValue"]
+        )
+    return df
+
 
 @dataclass
 class SQLiteStore:
@@ -131,31 +159,7 @@ class SQLiteStore:
                           cash_addition, cash_withdrawal, total_value
                    FROM portfolio_daily ORDER BY date"""
             ).fetchall()
-        df = pd.DataFrame(
-            rows,
-            columns=[
-                "Date",
-                "StockValue",
-                "BondValue",
-                "ETFValue",
-                "CashValue",
-                "CashAddition",
-                "CashWithdrawal",
-                "TotalValue",
-            ],
-        )
-        if df.empty:
-            return df
-        df["Date"] = pd.to_datetime(df["Date"]).dt.date
-        for c in ["StockValue", "BondValue", "ETFValue", "CashValue", "CashAddition", "CashWithdrawal", "TotalValue"]:
-            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(float)
-        # Recompute total if missing (e.g. legacy rows)
-        mask = (df["TotalValue"] == 0) & (df["StockValue"] + df["BondValue"] + df["CashValue"] + df["ETFValue"] > 0)
-        if mask.any():
-            df.loc[mask, "TotalValue"] = (
-                df.loc[mask, "StockValue"] + df.loc[mask, "BondValue"] + df.loc[mask, "CashValue"] + df.loc[mask, "ETFValue"]
-            )
-        return df
+        return _postprocess_df(rows, _PORTFOLIO_COLUMNS)
 
     def load_range(self, start: date, end: date) -> pd.DataFrame:
         with self.connect() as con:
@@ -167,30 +171,7 @@ class SQLiteStore:
                    ORDER BY date""",
                 (start.isoformat(), end.isoformat()),
             ).fetchall()
-        df = pd.DataFrame(
-            rows,
-            columns=[
-                "Date",
-                "StockValue",
-                "BondValue",
-                "ETFValue",
-                "CashValue",
-                "CashAddition",
-                "CashWithdrawal",
-                "TotalValue",
-            ],
-        )
-        if df.empty:
-            return df
-        df["Date"] = pd.to_datetime(df["Date"]).dt.date
-        for c in ["StockValue", "BondValue", "ETFValue", "CashValue", "CashAddition", "CashWithdrawal", "TotalValue"]:
-            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(float)
-        mask = (df["TotalValue"] == 0) & (df["StockValue"] + df["BondValue"] + df["CashValue"] + df["ETFValue"] > 0)
-        if mask.any():
-            df.loc[mask, "TotalValue"] = (
-                df.loc[mask, "StockValue"] + df.loc[mask, "BondValue"] + df.loc[mask, "CashValue"] + df.loc[mask, "ETFValue"]
-            )
-        return df
+        return _postprocess_df(rows, _PORTFOLIO_COLUMNS)
 
     def set_setting(self, key: str, value: str) -> None:
         with self.connect() as con:

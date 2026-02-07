@@ -45,31 +45,8 @@ def add_total(df: pd.DataFrame) -> pd.DataFrame:
     df["TotalValue"] = df["StockValue"] + df["BondValue"] + df["CashValue"] + df["ETFValue"]
     return df
 
-def period_return(df: pd.DataFrame, start: date, end: date, asset_class: Optional[AssetClass] = None) -> Dict[str, float]:
-    """Simple holding-period return: (End - Start) / Start. Use when no cash flows."""
-    if df.empty:
-        return {"start_value": 0.0, "end_value": 0.0, "return_pct": 0.0, "method": "simple"}
-
-    dff = df[(df["Date"] >= start) & (df["Date"] <= end)].copy()
-    if dff.empty:
-        return {"start_value": 0.0, "end_value": 0.0, "return_pct": 0.0, "method": "simple"}
-
-    dff = dff.sort_values("Date")
-    if asset_class is None:
-        dff = add_total(dff)
-        start_val = float(dff.iloc[0]["TotalValue"])
-        end_val = float(dff.iloc[-1]["TotalValue"])
-    else:
-        col = {"Stock":"StockValue","Bond":"BondValue","Cash":"CashValue","ETF":"ETFValue"}[asset_class]
-        start_val = float(dff.iloc[0][col])
-        end_val = float(dff.iloc[-1][col])
-
-    ret = 0.0 if start_val == 0 else (end_val - start_val) / start_val * 100.0
-    return {"start_value": start_val, "end_value": end_val, "return_pct": ret, "method": "simple"}
-
-
 def time_weighted_return(df: pd.DataFrame, start: date, end: date, asset_class: Optional[AssetClass] = None) -> Dict[str, float]:
-    """Time-Weighted Return (TWR). With no cash flows this is one sub-period = (End−Start)/Start; with cash flows compounds sub-period returns."""
+    """Time-Weighted Return (TWR). With no cash flows this is one sub-period = (End-Start)/Start; with cash flows compounds sub-period returns."""
     if df.empty:
         return {"start_value": 0.0, "end_value": 0.0, "return_pct": 0.0, "sub_periods": 0}
 

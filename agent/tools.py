@@ -3,11 +3,14 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Literal, Tuple
 
+import pandas as pd
 from pydantic import BaseModel, Field
 from langchain_core.tools import StructuredTool
 
-from prompts import RISK_QUESTIONS, RISK_QUESTION_OPTIONS, NUM_RISK_QUESTIONS
-from risk import score_risk_answers, infer_risk_from_allocation, TARGET_ALLOCATION_BY_RISK
+from core.analytics import allocation_on_date, max_drawdown, time_weighted_return, held_asset_classes_recent
+from core.prompts import RISK_QUESTIONS, RISK_QUESTION_OPTIONS, NUM_RISK_QUESTIONS
+from core.risk import score_risk_answers, infer_risk_from_allocation, TARGET_ALLOCATION_BY_RISK
+from agent.trends import search_trends, summarize_and_recommend
 
 class GetPerformanceArgs(BaseModel):
     """Input for get_performance."""
@@ -18,19 +21,6 @@ class GetPerformanceArgs(BaseModel):
         default=None,
         description="Optional: compute return for this asset class only; omit for total portfolio",
     )
-
-
-class PreviewPortfolioEditArgs(BaseModel):
-    """Input for preview_portfolio_edit."""
-
-    action: Literal["add", "update", "remove"] = Field(
-        description="add = new day, update = change existing, remove = delete day"
-    )
-    date: str = Field(description="Date in YYYY-MM-DD format")
-    stock: Optional[float] = Field(default=None, description="Stock value (for add/update)")
-    bond: Optional[float] = Field(default=None, description="Bond value (for add/update)")
-    cash: Optional[float] = Field(default=None, description="Cash value (for add/update)")
-    etf: Optional[float] = Field(default=None, description="ETF value (for add/update)")
 
 
 class SubmitRiskAnswerArgs(BaseModel):
@@ -60,29 +50,6 @@ class SuggestRebalanceArgs(BaseModel):
     )
 
 
-# --- Dummy implementations (only schema is used for LLM; execution is in graph) ---
-
-
-def _get_performance_placeholder(
-    start_date: str, end_date: str, asset_class: Optional[str] = None
-) -> str:
-    return ""
-
-
-def _preview_edit_placeholder(
-    action: str, date: str, stock: Optional[float] = None, bond: Optional[float] = None, cash: Optional[float] = None
-) -> str:
-    return ""
-
-
-def _submit_risk_placeholder(question_number: str, answer_text: str) -> str:
-    return ""
-
-
-def _fetch_trends_placeholder(asset_classes: List[str]) -> str:
-    return ""
-
-
 # --- Tools for binding to the LLM ---
 
 
@@ -91,7 +58,7 @@ def get_binding_tools() -> List[StructuredTool]:
     return [
         StructuredTool.from_function(
             name="get_capabilities",
-            description="Return a short description of what the assistant can do (performance, risk questionnaire, market trends, rebalance suggestion; portfolio updates via CSV upload in sidebar). Use when the user asks what you can do or for help.",
+            description="Return a short description of what the assistant can do (performance calculation, risk questionnaire, market trends, rebalance suggestion). The assistant is read-only and cannot modify any data; portfolio updates happen via CSV upload in the sidebar. Use when the user asks what you can do or for help.",
             func=lambda: "",
         ),
         StructuredTool.from_function(
@@ -106,7 +73,7 @@ def get_binding_tools() -> List[StructuredTool]:
         ),
         StructuredTool.from_function(
             name="suggest_rebalance",
-            description="Suggest a rebalance ratio and how to achieve it. If the user asks for a specific risk category (e.g. 'rebalance to aggressive', 'target for conservative'), pass target_risk with that category; otherwise uses stored or inferred risk. Returns current allocation, target allocation, and steps. Use when the user asks for rebalance advice or target allocation. Does not change any data.",
+            description="Suggest a rebalance ratio and how to achieve it (read-only — does NOT change any data). If the user asks for a specific risk category (e.g. 'rebalance to aggressive', 'target for conservative'), pass target_risk with that category; otherwise uses stored or inferred risk. Returns current allocation, target allocation, and steps. Do not offer to apply or execute the rebalance.",
             args_schema=SuggestRebalanceArgs,
             func=lambda: "",
         ),
@@ -117,25 +84,25 @@ def get_binding_tools() -> List[StructuredTool]:
         ),
         StructuredTool.from_function(
             name="submit_risk_answer",
-            description="Record the user's answer to a risk question (1-4) and return the next question or final profile. Call only when the user has just answered a question (e.g. they replied 'Hold', 'Buy more', or chose an option after seeing 'Question N of 4'). Do not call this when the user is only asking to start the questionnaire.",
+            description="Process the user's answer to a risk question (1-4) in the current session and return the next question or final inferred profile. This does NOT persist anything to the database — the risk profile is computed in-session only. Call only when the user has just answered a question (e.g. they replied 'Hold', 'Buy more', or chose an option after seeing 'Question N of 4'). Do not call this when the user is only asking to start the questionnaire.",
             args_schema=SubmitRiskAnswerArgs,
-            func=_submit_risk_placeholder,
+            func=lambda question_number, answer_text: "",
         ),
         StructuredTool.from_function(
             name="get_performance",
             description="Compute portfolio performance from stored SQLite data. Uses start_date and end_date (YYYY-MM-DD) to load the date range from the database; start value = total portfolio on start date, end value = total portfolio on end date (from SQLite). Returns period return and max drawdown. Prefer this whenever the user has loaded portfolio data and asks for return/performance over a period — do not ask the user for start/end market values; they are read from the store. If no data in that range, say so and direct the user to use the sidebar to upload a CSV file with their portfolio data.",
             args_schema=GetPerformanceArgs,
-            func=_get_performance_placeholder,
+            func=lambda start_date, end_date, asset_class=None: "",
         ),
         StructuredTool.from_function(
             name="fetch_market_trends",
             description="Fetch recent market trends/news via Tavily for the given asset classes. Call immediately when the user asks for latest trends/news/outlook/market updates (no permission/consent step). After calling, output ONLY the tool result (it includes a Sources section with URLs).",
             args_schema=FetchMarketTrendsArgs,
-            func=_fetch_trends_placeholder,
+            func=lambda asset_classes=None: "",
         ),
         StructuredTool.from_function(
             name="apply_risk_profile_change",
-            description="Update the stored risk profile to the suggested value after the user has confirmed with yes. Call only when the user explicitly said yes to updating their risk profile.",
+            description="Note the user's preferred risk profile for the current session based on trend analysis or their explicit request. This is session-only and does NOT persist to the database. The assistant cannot make permanent changes. Call only when the user explicitly states they want to note a different risk category for this session.",
             func=lambda: "",
         ),
     ]
@@ -148,11 +115,12 @@ def _handler_get_capabilities(
     _args: Dict[str, Any], _state: Dict[str, Any], _config: Dict[str, Any]
 ) -> Tuple[str, Dict[str, Any]]:
     result = (
-        "You can: (1) Get performance over a date range — give me start and end dates (YYYY-MM-DD) and I'll use your stored data to compute return and max drawdown; "
-        "(2) Run the risk questionnaire; "
-        "(3) Get latest market trends via web search; "
-        "(4) Suggest a rebalance ratio and how to achieve it based on your risk category. "
-        "I cannot edit your portfolio; to update data, upload your latest portfolio file (CSV) via the sidebar."
+        "I am a read-only portfolio assistant. I can: "
+        "(1) Calculate performance (return and max drawdown) over a date range from your uploaded data; "
+        "(2) Run a 4-question risk questionnaire to infer your risk profile; "
+        "(3) Fetch latest market trends and news via web search; "
+        "(4) Suggest a rebalance ratio based on your risk category. "
+        "I cannot edit, save, or modify any data. To update your portfolio, upload a CSV file via the sidebar."
     )
     return result, {}
 
@@ -180,8 +148,6 @@ def _handler_get_current_risk(
             "Use the sidebar to upload a CSV file with your portfolio data to calculate your risk category from your allocation.",
             {},
         )
-    from analytics import allocation_on_date
-
     df = store.load_all()
     if df.empty:
         return (
@@ -215,8 +181,6 @@ def _handler_suggest_rebalance(
     store = config.get("configurable", {}).get("store")
     if not store:
         return "Portfolio data is not available. Use the sidebar to upload a CSV file to get a rebalance suggestion.", {}
-
-    from analytics import allocation_on_date
 
     df = store.load_all()
     if df.empty:
@@ -345,9 +309,6 @@ def _handler_get_performance(
             {},
         )
 
-    from analytics import max_drawdown, time_weighted_return
-    import pandas as pd
-
     # Require data loaded before asking/using dates
     df_all = store.load_all()
     if df_all.empty:
@@ -393,7 +354,7 @@ def _handler_get_performance(
     )
     if mdd is not None:
         msg += f"- Max drawdown (total): **{mdd:.2f}%**\n"
-    return msg, {}
+    return msg, {"did_compute_metrics": True}
 
 
 def _handler_fetch_market_trends(
@@ -404,9 +365,6 @@ def _handler_fetch_market_trends(
     main_llm = config.get("configurable", {}).get("main_llm")
     if not main_llm:
         return "LLM not available for summarizing trends.", {}
-
-    from analytics import held_asset_classes_recent
-    from trends import search_trends, summarize_and_recommend
 
     # Determine topics for trend search.
     # - If caller passes asset_classes explicitly, respect that.
@@ -468,18 +426,18 @@ def _handler_fetch_market_trends(
     # Helper to render text as Unicode superscript, including digits and parentheses
     def _superscript(n: int | str) -> str:
         mapping = {
-            "0": "⁰",
-            "1": "¹",
-            "2": "²",
-            "3": "³",
-            "4": "⁴",
-            "5": "⁵",
-            "6": "⁶",
-            "7": "⁷",
-            "8": "⁸",
-            "9": "⁹",
-            "(": "⁽",
-            ")": "⁾",
+            "0": "\u2070",
+            "1": "\u00b9",
+            "2": "\u00b2",
+            "3": "\u00b3",
+            "4": "\u2074",
+            "5": "\u2075",
+            "6": "\u2076",
+            "7": "\u2077",
+            "8": "\u2078",
+            "9": "\u2079",
+            "(": "\u207d",
+            ")": "\u207e",
         }
         return "".join(mapping.get(ch, ch) for ch in str(n))
 
@@ -490,7 +448,7 @@ def _handler_fetch_market_trends(
             urls = asset_sources.get(ac, [])
             lines: List[str] = []
             for i, pt in enumerate(pts[:4]):
-                # Attach a fully superscript-style hyperlink label, e.g. [⁽¹⁾], without exposing the raw URL
+                # Attach a fully superscript-style hyperlink label, e.g. [superscript(1)], without exposing the raw URL
                 if i < len(urls):
                     label = _superscript(f"({i + 1})")
                     # Markdown link where only the superscript label is visible/clickable
@@ -510,50 +468,31 @@ def _handler_fetch_market_trends(
     msg = "Latest trend summary:\n\n" + "\n\n".join(blocks) + "\n\n"
     if suggested_change == "none" or not suggested_profile:
         msg += f"Risk profile: **no change suggested**. {reason}"
-        return msg, {"pending_kind": "none", "pending_payload": {}}
+        return msg, {"pending_kind": "none", "pending_payload": {}, "did_use_tavily": True}
     msg += (
-        f"Risk profile suggestion: **consider {suggested_change} risk** → **{suggested_profile}**.\n"
+        f"Risk profile suggestion: **consider {suggested_change} risk** \u2192 **{suggested_profile}**.\n"
         f"Reason: {reason}"
     )
     # Do NOT auto-prompt to update profile here; keep it informational only.
-    return msg, {"pending_kind": "none", "pending_payload": {}}
-
-
-def _handler_preview_portfolio_edit(
-    _args: Dict[str, Any], _state: Dict[str, Any], _config: Dict[str, Any]
-) -> Tuple[str, Dict[str, Any]]:
-    return (
-        "Portfolio changes (add, update, or remove daily values) require human advisor approval. "
-        "I cannot modify your portfolio. I can only suggest a rebalance ratio and how to achieve it based on your risk category — ask me to suggest a rebalance if you like.",
-        {},
-    )
-
-
-def _handler_apply_pending_edit(
-    _args: Dict[str, Any], _state: Dict[str, Any], _config: Dict[str, Any]
-) -> Tuple[str, Dict[str, Any]]:
-    return (
-        "Portfolio changes require human advisor approval. I cannot apply edits to your portfolio. "
-        "I can only suggest a rebalance ratio and how to achieve it — ask me to suggest a rebalance.",
-        {},
-    )
+    return msg, {"pending_kind": "none", "pending_payload": {}, "did_use_tavily": True}
 
 
 def _handler_apply_risk_profile_change(
-    _args: Dict[str, Any], state: Dict[str, Any], config: Dict[str, Any]
+    _args: Dict[str, Any], state: Dict[str, Any], _config: Dict[str, Any]
 ) -> Tuple[str, Dict[str, Any]]:
     if state.get("pending_kind") != "apply_risk_change":
-        return "No pending risk profile change. Use fetch_market_trends first and suggest a profile, then ask the user to confirm.", {}
-
-    store = config.get("configurable", {}).get("store")
-    if not store:
-        return "Storage not available.", {}
+        return "No pending risk profile change. Use fetch_market_trends first to see trend-based observations.", {}
 
     prof = (state.get("pending_payload") or {}).get("suggested_profile")
     if prof not in ("Conservative", "Moderate", "Aggressive"):
-        return "I couldn't apply that risk profile (invalid value).", {"pending_kind": "none", "pending_payload": {}}
-    store.set_risk_profile(prof)
-    return f"Confirmed — your stored risk profile is now **{prof}**.", {"pending_kind": "none", "pending_payload": {}, "risk_profile": prof}
+        return "I couldn't note that risk profile (invalid value).", {"pending_kind": "none", "pending_payload": {}}
+    # Session-only: update the in-memory risk profile but do NOT persist to SQLite.
+    # The assistant is read-only and cannot make permanent data changes.
+    return (
+        f"Noted \u2014 your risk profile for this session is **{prof}**. "
+        "This is not saved permanently. To make lasting changes, consult your financial advisor.",
+        {"pending_kind": "none", "pending_payload": {}, "risk_profile": prof},
+    )
 
 
 # Map tool name -> handler for the custom tools node
@@ -566,8 +505,6 @@ TOOL_HANDLERS: Dict[str, Any] = {
     "submit_risk_answer": _handler_submit_risk_answer,
     "get_performance": _handler_get_performance,
     "fetch_market_trends": _handler_fetch_market_trends,
-    "preview_portfolio_edit": _handler_preview_portfolio_edit,
-    "apply_pending_edit": _handler_apply_pending_edit,
     "apply_risk_profile_change": _handler_apply_risk_profile_change,
 }
 
