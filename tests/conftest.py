@@ -10,10 +10,14 @@ from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
+from dotenv import load_dotenv
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+
+# Load .env so integration tests can pick up API keys
+load_dotenv(PROJECT_ROOT / ".env")
 
 from core.storage import SQLiteStore
 
@@ -277,7 +281,8 @@ def real_llm():
         pytest.skip("OPENAI_API_KEY not set - skipping integration test")
 
     from langchain_openai import ChatOpenAI
-    return ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    model = os.environ.get("OPENAI_LLM_MODEL", "gpt-4o-mini")
+    return ChatOpenAI(model=model, temperature=0)
 
 
 # =============================================================================
