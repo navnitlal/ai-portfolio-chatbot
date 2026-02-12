@@ -8,6 +8,7 @@ A read-only portfolio management assistant built with **Streamlit**, **LangGraph
 - **Risk Profiling** — 4-question interactive questionnaire or instant inference from current allocation (Stock/Bond/ETF/Cash ratios)
 - **Rebalance Suggestions** — Target allocation for Conservative, Moderate, or Aggressive profiles with step-by-step guidance
 - **Live Market Trends** — Tavily-powered web search with LLM-summarized bullet points and inline source links
+- **Voice Input/Output** — Mic recording with auto-silence detection, OpenAI Whisper speech-to-text, and TTS-1 text-to-speech for hands-free interaction
 - **Strictly Read-Only** — The agent cannot create, update, or delete any data; portfolio changes happen via CSV upload only
 
 ## Agentic Architecture (LangGraph)
@@ -49,7 +50,8 @@ ai-portfolio-chatbot/
 │   ├── analytics.py             # TWR, max drawdown, allocation
 │   ├── risk.py                  # Risk profiling & scoring
 │   ├── storage.py               # SQLite persistence layer
-│   └── prompts.py               # System prompts & risk questions
+│   ├── prompts.py               # System prompts & risk questions
+│   └── voice.py                 # Mic recording, Whisper STT, TTS-1 synthesis
 ├── agent/                       # LangGraph agent architecture
 │   ├── state.py                 # GraphState, ChatState, schemas, constants
 │   ├── nodes.py                 # 8 node creation functions
@@ -59,6 +61,20 @@ ai-portfolio-chatbot/
 │   ├── judge.py                 # Response quality scoring & rewrite
 │   ├── policy.py                # Policy guardrails
 │   └── trends.py                # Tavily market trend search & summarization
+├── tests/                       # Automated test suite
+│   ├── conftest.py              # Shared fixtures & test utilities
+│   ├── core/                    # Core module tests
+│   │   ├── test_analytics.py    # Portfolio analytics
+│   │   ├── test_risk.py         # Risk profiling & scoring
+│   │   ├── test_storage.py      # SQLite operations
+│   │   └── test_voice.py        # Voice STT/TTS (unit + integration)
+│   └── agent/                   # Agent module tests
+│       ├── test_tools.py        # Tool handlers
+│       ├── test_routing.py      # Graph routing
+│       ├── test_nodes.py        # Graph nodes
+│       ├── test_state.py        # State management
+│       ├── test_judge.py        # Response quality scoring
+│       └── test_llm_responses.py # LLM response patterns
 ├── data/
 │   └── samples/                 # Sample portfolio CSVs for testing
 ├── pyproject.toml               # Project metadata & dependencies
@@ -130,7 +146,9 @@ The app will open at `http://localhost:8501`.
    - *"Suggest a rebalance to aggressive"*
    - *"What can you do?"*
 
-3. **View the sidebar** for a portfolio snapshot, CSV upload, and a button to clear data.
+3. **Use voice input** — Click the mic button to record your question. Speech is auto-transcribed via Whisper and the agent responds with TTS audio playback.
+
+4. **View the sidebar** for a portfolio snapshot, CSV upload, and a button to clear data.
 
 ## CSV Format
 
@@ -151,8 +169,10 @@ The app will open at `http://localhost:8501`.
 - **Frontend**: Streamlit
 - **Agent Framework**: LangGraph + LangChain
 - **LLM**: OpenAI (GPT-4o-mini default, configurable)
+- **Voice**: OpenAI Whisper (STT) + TTS-1 (speech synthesis) + sounddevice (mic capture)
 - **Search**: Tavily for live market trends
 - **Database**: SQLite (WAL mode) for portfolio storage
+- **Testing**: pytest with unit and integration tests (real OpenAI API)
 - **Observability**: Python logging + LangSmith tracing
 
 ## Constraints

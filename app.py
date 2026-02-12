@@ -18,6 +18,7 @@ from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, System
 from core.analytics import normalize_wide_csv, allocation_on_date
 from core.storage import SQLiteStore
 from core.risk import infer_risk_from_allocation
+from core.voice import record_audio, transcribe, synthesize
 from agent import ChatState, build_graph, state_to_dict, dict_to_state
 from agent.state import MemorySaver, Command
 from agent.tools import run_tool
@@ -98,6 +99,14 @@ def ensure_session():
     if "sidebar_messages" not in st.session_state:
         st.session_state.sidebar_messages = []
 
+    # Voice mode state
+    if "voice_mode" not in st.session_state:
+        st.session_state.voice_mode = False
+    if "tts_audio_bytes" not in st.session_state:
+        st.session_state.tts_audio_bytes = None
+    if "tts_autoplay_pending" not in st.session_state:
+        st.session_state.tts_autoplay_pending = False
+
 
 # ---------------------------------------------------------------------------
 # Config helpers
@@ -156,6 +165,12 @@ def render_chat(messages, risk_buttons=None):
                                 chosen = opt
                 else:
                     st.markdown(m.content)
+                    # TTS playback on the last assistant message
+                    if is_last and st.session_state.get("tts_audio_bytes"):
+                        autoplay = st.session_state.get("tts_autoplay_pending", False)
+                        st.audio(st.session_state.tts_audio_bytes, format="audio/mp3", autoplay=autoplay)
+                        if autoplay:
+                            st.session_state.tts_autoplay_pending = False
     return chosen
 
 
@@ -427,6 +442,9 @@ def main():
                             "You can ask for performance over a date range, run the risk questionnaire, or get latest trends in the US market."
                         )
                         state.messages.append(AIMessage(content=msg_text))
+                        # Clear any stale TTS audio so the upload message isn't accompanied by old voice
+                        st.session_state.tts_audio_bytes = None
+                        st.session_state.tts_autoplay_pending = False
                         st.session_state.state = state
                         st.toast("Portfolio CSV uploaded and merged successfully.", icon="✅")
                         df_all = df_all_after
@@ -502,18 +520,58 @@ def main():
         if state.messages and isinstance(state.messages[-1], AIMessage) and state.messages[-1].content:
             state.messages[-1] = AIMessage(content=_dedupe_risk_question_content(state.messages[-1].content))
 
+        # TTS generation (voice mode)
+        if st.session_state.voice_mode and state.messages and isinstance(state.messages[-1], AIMessage) and state.messages[-1].content:
+            api_key = os.getenv("OPENAI_API_KEY", "")
+            if api_key:
+                with st.spinner("Generating speech..."):
+                    tts_bytes = synthesize(state.messages[-1].content, api_key)
+                if tts_bytes:
+                    st.session_state.tts_audio_bytes = tts_bytes
+                    st.session_state.tts_autoplay_pending = True
+            else:
+                st.session_state.tts_audio_bytes = None
+
         st.session_state.pending_ai_response = False
         st.session_state.state = state
         st.rerun()
 
-    # --- Chat input ---
-    user_input = st.chat_input("Ask about latest trend in US markets or calculate performance of your portfolio.")
-    if not user_input:
+    # --- Chat input with voice mic (sounddevice) ---
+    # chat_input at root level so Streamlit pins it to the bottom of the window.
+    # Mic button rendered just above it.
+    voice_text = None
+    mic_clicked = st.button("🎤", key="mic_btn", help="Click to record (auto-stops on silence)")
+    user_input = st.chat_input("Ask about your portfolio or latest market trends...")
+    if mic_clicked:
+        with st.spinner("Recording... speak now"):
+            audio_bytes = record_audio(max_duration=10, silence_duration=1.5)
+        if audio_bytes:
+            api_key = os.getenv("OPENAI_API_KEY", "")
+            if api_key:
+                with st.spinner("Transcribing..."):
+                    voice_text = transcribe(audio_bytes, api_key)
+                if voice_text:
+                    st.toast(f"Heard: {voice_text}", icon="🎤")
+            else:
+                st.warning("OPENAI_API_KEY not set — cannot transcribe.")
+        else:
+            st.toast("No audio captured.", icon="⚠️")
+
+    effective_input = user_input or voice_text
+    if not effective_input:
         return
 
-    state.messages.append(HumanMessage(content=user_input))
+    # Activate voice mode (TTS) only when input came from the mic
+    if voice_text:
+        st.session_state.voice_mode = True
+    else:
+        st.session_state.voice_mode = False
+        st.session_state.tts_audio_bytes = None
+        st.session_state.tts_autoplay_pending = False
 
-    if state.pending_kind != "none" and _is_no(user_input):
+    state.messages.append(HumanMessage(content=effective_input))
+
+    if state.pending_kind != "none" and _is_no(effective_input):
         state.pending_kind = "none"
         state.pending_payload = {}
         state.messages.append(AIMessage(content="Canceled. What would you like to do next?"))

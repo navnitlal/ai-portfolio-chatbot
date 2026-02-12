@@ -465,8 +465,8 @@ def create_judge_node():
             updates: Dict[str, Any] = {"last_judge": verdict}
 
             if improved != last_content:
-                updated_messages = messages[:-1] + [AIMessage(content=improved)]
-                updates["messages"] = updated_messages
+                # Preserve message ID so add_messages replaces in-place instead of appending
+                updates["messages"] = [AIMessage(content=improved, id=last_msg.id)]
 
             return updates
 
@@ -563,8 +563,8 @@ def create_policy_node():
             updates: Dict[str, Any] = {"last_policy": policy_report}
 
             if safe_text != last_content:
-                updated_messages = messages[:-1] + [AIMessage(content=safe_text)]
-                updates["messages"] = updated_messages
+                # Preserve message ID so add_messages replaces in-place instead of appending
+                updates["messages"] = [AIMessage(content=safe_text, id=last_msg.id)]
 
             # Reset execution flags for next turn
             updates["did_persist_change"] = False
