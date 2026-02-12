@@ -15,3 +15,4 @@ from core.risk import (
     TARGET_ALLOCATION_BY_RISK,
 )
 from core.storage import SQLiteStore
+from core.voice import record_audio, transcribe, synthesize

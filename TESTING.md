@@ -19,7 +19,8 @@ tests/
 ├── core/                    # Core module tests
 │   ├── test_analytics.py    # Portfolio analytics (TWR, drawdown, allocation)
 │   ├── test_risk.py         # Risk profiling and scoring
-│   └── test_storage.py      # SQLite database operations
+│   ├── test_storage.py      # SQLite database operations
+│   └── test_voice.py        # Voice recording, Whisper STT, TTS-1 synthesis
 └── agent/                   # Agent module tests
     ├── test_tools.py        # Tool handler functions
     ├── test_routing.py      # Graph routing logic
@@ -94,11 +95,23 @@ uv run pytest -m "not integration"
 
 ### Run Integration Tests
 
-Requires `OPENAI_API_KEY` environment variable:
+Requires `OPENAI_API_KEY` environment variable (loaded from `.env`):
 
 ```bash
-export OPENAI_API_KEY=your-api-key
 uv run pytest -m integration
+```
+
+### Run Voice Tests Only
+
+```bash
+# Unit tests (mocked, no API key needed)
+uv run pytest tests/core/test_voice.py -m "not integration"
+
+# Integration tests (real OpenAI Whisper & TTS-1)
+uv run pytest tests/core/test_voice.py -m integration
+
+# All voice tests
+uv run pytest tests/core/test_voice.py
 ```
 
 ## Code Coverage
@@ -141,6 +154,20 @@ Then open `htmlcov/index.html` in a browser.
 - **TestClearPortfolio**: Clear all portfolio data
 - **TestLoadAll/TestLoadRange**: Data retrieval
 - **TestSettings/TestRiskProfile**: Settings management
+
+#### `test_voice.py`
+
+Unit tests (mocked — no API calls):
+
+- **TestRecordAudio**: Mic recording via sounddevice — WAV output format, empty frames, device errors, auto-silence detection
+- **TestTranscribe**: Whisper STT — text return, API errors, whitespace stripping, temp file cleanup on success and failure
+- **TestSynthesize**: TTS-1 synthesis — MP3 byte output, custom voice forwarding, API errors, empty text guard, 4096-char truncation
+
+Integration tests (real OpenAI API — requires `OPENAI_API_KEY`):
+
+- **TestSynthesizeIntegration**: Real TTS-1 calls — audio byte output, multiple voices (`alloy`, `nova`), long text truncation
+- **TestTranscribeIntegration**: Real Whisper calls — uses TTS-1 to generate speech WAVs, then transcribes and verifies keyword accuracy for general and financial terminology
+- **TestVoiceRoundTrip**: End-to-end pipeline — text → TTS-1 speech → Whisper transcription → verify key words survive the round-trip, then synthesise the transcription back to audio
 
 ### Agent Module Tests
 
@@ -224,6 +251,32 @@ def test_tool_with_config(agent_config):
     }, {}, agent_config)
 
     assert "return" in result.lower()
+```
+
+### Testing Voice (Mocked)
+
+```python
+from unittest.mock import patch, MagicMock
+
+@patch("core.voice.OpenAI")
+def test_transcribe_returns_text(mock_openai_cls):
+    mock_client = MagicMock()
+    mock_openai_cls.return_value = mock_client
+    mock_client.audio.transcriptions.create.return_value = MagicMock(text="Hello")
+
+    result = transcribe(wav_bytes, api_key="test-key")
+    assert result == "Hello"
+```
+
+### Testing Voice (Real API)
+
+```python
+@pytest.mark.integration
+def test_synthesize_real(openai_api_key):
+    """Uses OPENAI_API_KEY from .env to call the real TTS-1 API."""
+    result = synthesize("Hello", api_key=openai_api_key)
+    assert result is not None
+    assert len(result) > 100
 ```
 
 ## Continuous Integration
